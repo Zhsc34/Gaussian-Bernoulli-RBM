@@ -1,16 +1,12 @@
 import torch
 
-dfloat = torch.float
-device = torch.device("cuda:0")
-
-
+cuda0 = torch.device("cuda:0")
 
 class rmb():
-
     def __init__(self, 
-        visible_size=100, hidden_size=120, weight_init, hidden_bias_init, visible_bias_init, 
-        learning_rate=0.0001, n_epoch, batch_size=100, n_gibbs_sampling=1, 
-        hidden_type="bernoulli", n_ssu, gaussian_noise_variance=10):
+        visible_size=100, hidden_size=120, weight_init=None, hidden_bias_init=None, visible_bias_init=None, 
+        learning_rate=1e-4, n_epoch=None, batch_size=100, n_gibbs_sampling=1, 
+        hidden_type="bernoulli", gaussian_noise_variance=10):
         """
         Gaussian-Bernoulli Restricted Boltzmann Machine with SSUs
 
@@ -21,10 +17,11 @@ class rmb():
         hidden_size: int, default=120
             size of hidden layer
         weight_init: (visible_size, hidden_size) sized tensor
+            defaults to sampling from normal distribution with std=0.01
             initializes weight matrix
-        hidden_bias_init: (hidden_size) sized tensor
+        hidden_bias_init: (hidden_size) sized tensor, defaults to all 0
             initializes bias for hidden layer
-        visible_bias_init: (visible_size) sized tensor
+        visible_bias_init: (visible_size) sized tensor, defaults to all 0
             initializes bias for visible layer
         learning_rate: float, default=0.0001
             learning rate for gradient descent
@@ -38,14 +35,10 @@ class rmb():
         hidden_type: str, default="bernoulli"
             types of hidden layer nodes
             possible types: "bernoulli", "SSU", "NReLu"
-        n_ssu: int
-            number of SSUs for each bernoulli node
-            only works when hidden_type="SSU"
         gaussian_noise_variance: float, default=10
             variance for gaussian noise to be used in NReLu
             only works with hidden_type="NReLu"
         """
-        pass
-
-if __name__ == "__main__":
-    main()  
+        self.visible_size = visible_size
+        self.hidden_size = hidden_size
+        
