@@ -1,2 +1,6 @@
-/TIMIT/
-/.vscode/
+*
+!.gitignore
+!rbm.py
+!nist_to_wav.py
+!preprocessing.py
+!README.md
