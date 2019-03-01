@@ -34,14 +34,16 @@ def preprocessing(directory, window_size=100, target_std=10):
     std = np.std(entire_dataset)
     
     input_data = np.array([])
+    input_size = 0
     for wav in wav_list:
         # normalize input to target standard deviation
         wav = np.divide(np.subtract(wav, mean), std/target_std)
         # fregment wav file according to window_size
         wav_fragment_length = int(wav.size/window_size)
         wav = wav[:wav_fragment_length * window_size]
-        fragmented_wav = wav.reshape((wav_fragment_length, window_size))
-        # append fragmented wav file to input data
-        input_data = np.append(input_data, fragmented_wav)
+        input_size += wav_fragment_length
+        input_data = np.append(input_data, wav)
+
+    input_data = input_data.reshape((input_size, window_size))
 
     return input_data
