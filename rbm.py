@@ -3,6 +3,8 @@ import numpy as np
 from preprocessing import preprocessing
 from nist_to_wav import NIST_to_wav
 
+
+
 torch.set_default_dtype(torch.double)
 
 class rbm():
@@ -97,8 +99,8 @@ class rbm():
         
         for i in range(0, int(input_size * self.n_epoch / self.batch_size)):
             batch = input_data[np.random.choice(input_size, size=self.batch_size)]
-            self.gradient_descent(torch.from_numpy(batch))
             print("Batch #" + str(i + 1))
+            self.gradient_descent(torch.from_numpy(batch))
 
     def energy(self):
         """
@@ -113,16 +115,18 @@ class rbm():
         batch: (batch_size, visible_size) sized tensor
             the batch used in gradient descent
         """
+        # TODO clarify std learning?
         self.visible_layer = batch[0]
+        self.visible_std = self.visible_layer.std().item()
         self.gibbs_sampling()
         positive_gradient_weight = torch.ger(self.visible_layer, self.hidden_layer.double())
         original_visible_layer = self.visible_layer.clone()
         original_hidden_layer = self.hidden_layer.clone()
         original_visible_bias = self.visible_bias.clone()
-        self.visible_std = self.visible_layer.std().item()
 
         for i in range(1, self.batch_size):
             self.visible_layer = batch[i]
+            self.visible_std = self.visible_layer.std().item()
             for k in range(0, self.n_gibbs_sampling):
                 self.gibbs_sampling()
 
@@ -133,13 +137,14 @@ class rbm():
         self.weights += self.learning_rate * (positive_gradient_weight - negative_gradient_weight)
         self.hidden_bias += self.learning_rate * gradient_hidden_bias
         self.visible_bias += self.learning_rate * gradient_visible_bias
-        self.visible_std = self.learning_rate * -2 * (torch.sum(torch.pow(2, self.visible_layer - self.visible_bias)).item() - torch.sum(torch.pow(2, original_visible_layer - original_visible_bias)).item()) * self.visible_std ** -3
-
+        # self.visible_std = self.learning_rate * 1e-6 * -2 * (torch.sum(torch.pow(2, self.visible_layer - self.visible_bias)).item() - torch.sum(torch.pow(2, original_visible_layer - original_visible_bias)).item()) * self.visible_std ** -3
+        
     def gibbs_sampling(self):
         """
         Perform one iteration of alternating Gibbs sampling on hidden and visible layers
         """
         # sample hidden layer
+        # TODO NReLu
         hidden_probabilities = torch.sigmoid(torch.addmv(self.hidden_bias, self.weights.transpose(0, 1), self.visible_layer))
         torch.bernoulli(hidden_probabilities, out=self.hidden_layer)
         

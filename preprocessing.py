@@ -38,6 +38,7 @@ def preprocessing(directory, window_size=100, target_std=10):
     for wav in wav_list:
         # normalize input to target standard deviation
         wav = np.divide(np.subtract(wav, mean), std/target_std)
+        print(np.std(wav))
         # fregment wav file according to window_size
         wav_fragment_length = int(wav.size/window_size)
         wav = wav[:wav_fragment_length * window_size]
