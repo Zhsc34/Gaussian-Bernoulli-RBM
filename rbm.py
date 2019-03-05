@@ -10,8 +10,8 @@ torch.set_default_dtype(torch.double)
 class rbm():
     def __init__(self, 
         visible_size=100, hidden_size=120, weights_init=None, hidden_bias_init=None, visible_bias_init=None, 
-        learning_rate=1e-4, n_epoch=30, batch_size=100, n_gibbs_sampling=1, 
-        hidden_type="bernoulli", gaussian_noise_variance=10, use_cuda=False):
+        learning_rate=1e-4, momentum=0.5, n_epoch=30, batch_size=100,
+        n_gibbs_sampling=1, hidden_type="bernoulli", use_cuda=False):
         """
         Gaussian-Bernoulli Restricted Boltzmann Machine with SSUs
 
@@ -30,6 +30,8 @@ class rbm():
             initializes bias for visible layer
         learning_rate: float, default=0.0001
             learning rate for gradient descent
+        momentum: float, default=0.5
+            momentum for gradient descent
         n_epoch: int, default=30
             number of epochs to train for
         batch_size: int, default=100
@@ -52,12 +54,15 @@ class rbm():
         self.hidden_bias_init = hidden_bias_init
         self.visible_bias_init = visible_bias_init
         self.learning_rate = learning_rate
+        self.momentum = momentum
         self.n_epoch = n_epoch
         self.batch_size = batch_size
         self.n_gibbs_sampling = n_gibbs_sampling
         self.hidden_type = hidden_type
-        self.gaussian_noise_variance = gaussian_noise_variance
-        self.visible_std = 1
+        self.previous_weights = torch.zeros(self.visible_size, self.hidden_size)
+        self.previous_visible_bias = torch.zeros(self.visible_size)
+        self.previous_hidden_bias = torch.zeros(self.hidden_size)
+        # self.visible_std = 1.0
 
         self.weights = torch.empty(visible_size, hidden_size)
         if weights_init is None:
@@ -79,7 +84,6 @@ class rbm():
 
         self.hidden_layer = torch.empty(self.hidden_size)
         self.visible_layer = torch.empty(self.visible_size)
-
         
         if use_cuda:
             self.hidden_layer = self.hidden_layer.to(torch.device("cuda"))
@@ -97,7 +101,8 @@ class rbm():
         """
         input_size = input_data.shape[0]
         
-        for i in range(0, int(input_size * self.n_epoch / self.batch_size)):
+        # for i in range(0, int(input_size * self.n_epoch / self.batch_size)):
+        for i in range(0, 101):
             batch = input_data[np.random.choice(input_size, size=self.batch_size)]
             print("Batch #" + str(i + 1))
             self.gradient_descent(torch.from_numpy(batch))
@@ -115,42 +120,47 @@ class rbm():
         batch: (batch_size, visible_size) sized tensor
             the batch used in gradient descent
         """
-        # TODO clarify std learning?
-        self.visible_layer = batch[0]
-        self.visible_std = self.visible_layer.std().item()
-        self.gibbs_sampling()
-        positive_gradient_weight = torch.ger(self.visible_layer, self.hidden_layer.double())
-        original_visible_layer = self.visible_layer.clone()
-        original_hidden_layer = self.hidden_layer.clone()
-        original_visible_bias = self.visible_bias.clone()
+        batch_weights_gradient = torch.zeros(self.visible_size, self.hidden_size)
+        batch_visible_bias_gradient = torch.zeros(self.visible_size)
+        batch_hidden_bias_gradient = torch.zeros(self.hidden_size)
 
-        for i in range(1, self.batch_size):
+        for i in range(0, self.batch_size):
             self.visible_layer = batch[i]
-            self.visible_std = self.visible_layer.std().item()
+            # self.visible_std = self.visible_layer.std().item()
+            self.sample_hidden()
+            positive_gradient_weight = torch.ger(self.visible_layer, self.hidden_layer)
+            positive_gradient_visible_bias = self.visible_layer.clone()
+            positive_gradient_hidden_bias = self.hidden_layer.clone()
             for k in range(0, self.n_gibbs_sampling):
-                self.gibbs_sampling()
+                self.sample_visible()
+                self.sample_hidden()
+            batch_weights_gradient += positive_gradient_weight - torch.ger(self.visible_layer, self.hidden_layer)
+            batch_visible_bias_gradient += positive_gradient_visible_bias - self.visible_layer
+            batch_hidden_bias_gradient += positive_gradient_hidden_bias - self.hidden_layer
 
-        negative_gradient_weight = torch.ger(self.visible_layer, self.hidden_layer.double())
-        gradient_visible_bias = original_visible_layer - self.visible_layer 
-        gradient_hidden_bias = original_hidden_layer - self.hidden_layer
+        self.weights += (self.learning_rate * batch_weights_gradient + self.momentum * self.previous_weights) / self.batch_size
+        self.hidden_bias += (self.learning_rate * batch_hidden_bias_gradient + self.momentum *  self.previous_hidden_bias) / self.batch_size
+        self.visible_bias += (self.learning_rate * batch_visible_bias_gradient +  self.momentum *  self.previous_visible_bias) / self.batch_size
 
-        self.weights += self.learning_rate * (positive_gradient_weight - negative_gradient_weight)
-        self.hidden_bias += self.learning_rate * gradient_hidden_bias
-        self.visible_bias += self.learning_rate * gradient_visible_bias
-        # self.visible_std = self.learning_rate * 1e-6 * -2 * (torch.sum(torch.pow(2, self.visible_layer - self.visible_bias)).item() - torch.sum(torch.pow(2, original_visible_layer - original_visible_bias)).item()) * self.visible_std ** -3
-        
-    def gibbs_sampling(self):
-        """
-        Perform one iteration of alternating Gibbs sampling on hidden and visible layers
-        """
+        self.previous_weights = batch_weights_gradient
+        self.previous_visible_bias = batch_visible_bias_gradient
+        self.previous_hidden_bias = batch_hidden_bias_gradient
+
+    def sample_hidden(self):
         # sample hidden layer
-        # TODO NReLu
-        hidden_probabilities = torch.sigmoid(torch.addmv(self.hidden_bias, self.weights.transpose(0, 1), self.visible_layer))
-        torch.bernoulli(hidden_probabilities, out=self.hidden_layer)
-        
+        if self.hidden_type == "bernoulli":
+            hidden_probabilities = torch.sigmoid(torch.addmv(self.hidden_bias, self.weights.transpose(0, 1), self.visible_layer))
+            torch.bernoulli(hidden_probabilities, out=self.hidden_layer)
+        else:
+            x = torch.mv(self.weights.transpose(0, 1), self.visible_layer) 
+            self.hidden_layer = torch.clamp(torch.normal(mean=x, std=torch.sigmoid(x)), min=0.0)
+
+    def sample_visible(self):   
         # sample visible layer
-        visible_normal_mean = torch.addmv(self.visible_bias, self.weights, self.hidden_layer, alpha=self.visible_std * self.visible_std)
-        torch.normal(mean=visible_normal_mean.double(), std=self.visible_std * self.visible_std, out=self.visible_layer)
+        # visible_normal_mean = torch.addmv(self.visible_bias, self.weights, self.hidden_layer, alpha=self.visible_std * self.visible_std)
+        # torch.normal(mean=visible_normal_mean, std=self.visible_std * self.visible_std, out=self.visible_layer)
+        visible_normal_mean = torch.addmv(self.visible_bias, self.weights, self.hidden_layer, alpha=100)
+        torch.normal(mean=visible_normal_mean, std=100, out=self.visible_layer)
 
 if __name__ == "__main__":
     # NIST_to_wav('./TIMIT/TEST/*/*/*.wav', './TEST/')
