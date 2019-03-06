@@ -73,7 +73,8 @@ class rbm():
 
         self.hidden_bias = torch.empty(hidden_size)
         if hidden_bias_init is None:
-            self.hidden_bias.zero_()
+            # self.hidden_bias.zero_()
+            self.hidden_bias.exponential_(lambd=2)
         else:
             self.hidden_bias = torch.from_numpy(hidden_bias_init)
         
@@ -154,7 +155,7 @@ class rbm():
         self.visible_std_momentum = self.visible_std_momentum * self.momentum + torch.div(torch.sum(negative_std_association - positive_std_association, dim=0), torch.pow(self.visible_std, 3))
         self.visible_std += self.visible_std_momentum * self.learning_rate / self.batch_size
         # self.visible_std += torch.div(torch.sum(negative_std_association - positive_std_association, dim=0), torch.pow(self.visible_std, 3)) * self.learning_rate / self.batch_size
-        error = torch.sum((batch - visible_layer) ** 2)
+        error = torch.sum((batch - visible_layer) ** 2) / (self.batch_size * self.visible_size)
         print("             Error: " + str(error.item()))
     
 
@@ -187,8 +188,8 @@ class rbm():
         Returns
             tensor containing sampled visible layer
         """ 
-        visible_normal_mean = torch.mul(torch.mm(hidden_layer, self.weights.transpose(0, 1)), torch.pow(self.visible_std, 2)) + self.visible_bias
-        visible_layer = torch.normal(mean=visible_normal_mean, std=self.visible_std.expand(self.batch_size, -1))
+        visible_normal_mean = torch.mul(torch.mm(hidden_layer, self.weights.transpose(0, 1)), torch.pow(self.visible_std, 2))
+        visible_layer = torch.normal(mean=visible_normal_mean + self.visible_bias, std=self.visible_std.expand(self.batch_size, -1))
         return visible_layer
 
 if __name__ == "__main__":
