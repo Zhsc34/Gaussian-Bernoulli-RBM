@@ -3,7 +3,9 @@ import numpy as np
 from preprocessing import preprocessing
 from nist_to_wav import NIST_to_wav
 
-torch.set_default_dtype(torch.double)
+# torch.set_default_dtype(torch.double)
+
+torch.set_default_tensor_type(torch.cuda.DoubleTensor)
 
 class rbm():
     def __init__(self, 
@@ -81,16 +83,16 @@ class rbm():
         else:
             self.visible_bias = torch.from_numpy(visible_bias_init)
     
-        if use_cuda:
-            self.hidden_bias = self.hidden_bias.to(torch.device("cuda"))
-            self.visible_bias = self.visible_bias.to(torch.device("cuda"))
-            self.weights = self.weights.to(torch.device("cuda"))
-            self.visible_std = self.visible_std.to(torch.device("cuda"))
+        # if use_cuda:
+        #     self.hidden_bias = self.hidden_bias.to(torch.device("cuda"))
+        #     self.visible_bias = self.visible_bias.to(torch.device("cuda"))
+        #     self.weights = self.weights.to(torch.device("cuda"))
+        #     self.visible_std = self.visible_std.to(torch.device("cuda"))
 
-            self.weights_momentum = self.weights_momentum.to(torch.device("cuda"))
-            self.visible_bias_momentum = self.visible_bias_momentum.to(torch.device("cuda"))
-            self.hidden_bias_momentum = self.hidden_bias_momentum.to(torch.device("cuda"))
-            self.visible_std_momentum = self.visible_std_momentum.t(torch.device("cuda"))
+        #     self.weights_momentum = self.weights_momentum.to(torch.device("cuda"))
+        #     self.visible_bias_momentum = self.visible_bias_momentum.to(torch.device("cuda"))
+        #     self.hidden_bias_momentum = self.hidden_bias_momentum.to(torch.device("cuda"))
+        #     self.visible_std_momentum = self.visible_std_momentum.to(torch.device("cuda"))
 
 
     def train(self, input_data):
@@ -108,8 +110,13 @@ class rbm():
             for j in range(num_batch_in_input):
                 batch = input_data[np.random.choice(input_size, size=self.batch_size)]
                 print("Batch #" + str(batch_num), end='')
-                self.contrastive_divergence(torch.from_numpy(batch))
+                self.contrastive_divergence(torch.from_numpy(batch).cuda())
                 batch_num += 1
+
+        torch.save(self.visible_bias, "visible_bias.pt")
+        torch.save(self.hidden_bias, "hidden_bias.pt")
+        torch.save(self.weights, "weights.pt")
+        torch.save(self.visible_std, "std.pt")
 
     def contrastive_divergence(self, batch):
         """
