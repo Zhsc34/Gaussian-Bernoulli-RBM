@@ -60,11 +60,6 @@ class rbm():
         self.hidden_type = hidden_type
         self.visible_std = torch.full((1, visible_size), visible_std_init)
 
-        self.visible_bias_momentum = torch.zeros(visible_size)
-        self.hidden_bias_momentum = torch.zeros(hidden_size)
-        self.weights_momentum = torch.zeros(visible_size, hidden_size)
-        self.visible_std_momentum = torch.zeros(visible_size)
-
         self.weights = torch.empty(visible_size, hidden_size)
         if weights_init is None:
             self.weights.normal_(mean=0, std=0.01)
@@ -83,20 +78,13 @@ class rbm():
             self.visible_bias.zero_()
         else:
             self.visible_bias = torch.from_numpy(visible_bias_init)
-    
-        # if use_cuda:
-        #     self.hidden_bias = self.hidden_bias.to(torch.device("cuda"))
-        #     self.visible_bias = self.visible_bias.to(torch.device("cuda"))
-        #     self.weights = self.weights.to(torch.device("cuda"))
-        #     self.visible_std = self.visible_std.to(torch.device("cuda"))
 
-        #     self.weights_momentum = self.weights_momentum.to(torch.device("cuda"))
-        #     self.visible_bias_momentum = self.visible_bias_momentum.to(torch.device("cuda"))
-        #     self.hidden_bias_momentum = self.hidden_bias_momentum.to(torch.device("cuda"))
-        #     self.visible_std_momentum = self.visible_std_momentum.to(torch.device("cuda"))
+        self.visible_bias_momentum = self.visible_bias.clone()
+        self.hidden_bias_momentum = self.hidden_bias.clone()
+        self.weights_momentum = self.weights.clone()
+        self.visible_std_momentum = self.visible_std.clone()
 
-
-    def train(self, input_data):
+    def train(self, input_data, validation_data):
         """
         Train RBM with input data
 
@@ -105,19 +93,40 @@ class rbm():
         """
         input_size = input_data.shape[0]
         num_batch_in_input = int(input_size/self.batch_size)
-        
+        free_energy_gaps = torch.empty(self.n_epoch * num_batch_in_input) 
+        training_set_representative = torch.from_numpy(input_data[np.random.choice(input_size, size=10, replace=False), :]).cuda()
+        validation_data = torch.from_numpy(validation_data).cuda()
+        validation_size = validation_data.shape[0]
+        validation_set = validation_data[np.random.choice(validation_size, size=10, replace=False), :]
+
         batch_num = 1
         for i in range(self.n_epoch):
             for j in range(num_batch_in_input):
-                batch = input_data[np.random.choice(input_size, size=self.batch_size)]
+                idx = np.random.choice(input_size, size=self.batch_size, replace=False)
+                batch = input_data[idx, :]
                 print("Batch #" + str(batch_num), end='')
-                self.contrastive_divergence(torch.from_numpy(batch).cuda())
+                self.contrastive_divergence(torch.from_numpy(batch).cuda()) 
+                free_energy_gaps[batch_num - 1] = self.free_energy(training_set_representative) - self.free_energy(validation_set)
                 batch_num += 1
 
         torch.save(self.visible_bias, "visible_bias.pt")
         torch.save(self.hidden_bias, "hidden_bias.pt")
         torch.save(self.weights, "weights.pt")
         torch.save(self.visible_std, "std.pt")
+        torch.save(free_energy_gaps, "feg.pt")
+
+    def free_energy(self, visible_layers):
+        """
+        Calculate average free energy of given visible layers
+
+        visible_layer: (validation_set_size, visible_size) sized tensor
+            visible layer used to calculate free energy
+
+        Returns
+            average free energy of the given input
+        """
+        return (-1 * torch.sum(torch.mv(visible_layers, self.visible_bias)) - torch.sum(torch.log1p(torch.exp(torch.matmul(visible_layers, self.weights) + self.hidden_bias))))/self.batch_size
+
 
     def contrastive_divergence(self, batch):
         """
@@ -126,11 +135,12 @@ class rbm():
         batch: (batch_size, visible_size) sized tensor
             the batch used in gradient descent
         """
-        visible_layer = batch
+        visible_layer = batch.clone()
         hidden_layer = self.sample_hidden(visible_layer)
         if(self.hidden_type == "bernoulli"):
             hidden_layer = torch.bernoulli(hidden_layer)
-        positive_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        # positive_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        positive_association = torch.matmul(visible_layer.t(), hidden_layer)
         positive_hidden_association = hidden_layer
         positive_std_association = torch.pow(visible_layer - self.visible_bias, 2) 
 
@@ -140,9 +150,11 @@ class rbm():
             if(self.hidden_type == "bernoulli"):
                 hidden_layer = torch.bernoulli(hidden_layer)
         
-        negative_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        # negative_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        negative_association = torch.matmul(visible_layer.t(), hidden_layer)
 
-        self.weights_momentum = self.weights_momentum * self.momentum + torch.sum(positive_association - negative_association, dim=0)
+        # self.weights_momentum = self.weights_momentum * self.momentum + torch.sum(positive_association - negative_association, dim=0)
+        self.weights_momentum = self.weights_momentum * self.momentum + positive_association - negative_association
         self.visible_bias_momentum = self.visible_bias_momentum * self.momentum + torch.sum(batch - visible_layer, dim=0)
         self.hidden_bias_momentum = self.hidden_bias_momentum * self.momentum + torch.sum(positive_hidden_association - hidden_layer, dim=0)
 
@@ -174,8 +186,8 @@ class rbm():
             hidden_probabilities = torch.sigmoid(torch.mm(visible_layer, self.weights) + self.hidden_bias)
             return hidden_probabilities
         else:
-            x = torch.mm(visible_layer, self.weights) + self.hidden_bias
-            hidden_layer = torch.clamp(torch.normal(mean=x, std=torch.sigmoid(x)), min=0.0)
+            x = torch.mm(visible_layer, self.weights)
+            hidden_layer = torch.clamp(torch.normal(mean=x, std=torch.sigmoid(x)), min=0.0) + self.hidden_bias
             return hidden_layer
 
     def sample_visible(self, hidden_layer):  
@@ -188,13 +200,14 @@ class rbm():
         Returns
             tensor containing sampled visible layer
         """ 
-        visible_normal_mean = torch.mul(torch.mm(hidden_layer, self.weights.transpose(0, 1)), torch.pow(self.visible_std, 2))
-        visible_layer = torch.normal(mean=visible_normal_mean + self.visible_bias, std=self.visible_std.expand(self.batch_size, -1))
+        visible_normal_mean = torch.mul(torch.mm(hidden_layer, self.weights.transpose(0, 1)), torch.pow(self.visible_std, 2)) + self.visible_bias
+        visible_layer = torch.normal(mean=visible_normal_mean, std=self.visible_std.expand(self.batch_size, -1))
         return visible_layer
 
 if __name__ == "__main__":
-    # NIST_to_wav('./TIMIT/TEST/*/*/*.wav', './TEST/')
-    input_data = preprocessing('./TEST/*.wav')
+    # NIST_to_wav('./TIMIT/TRAIN/*/*/*.WAV', './TRAIN/')
+    input_data = preprocessing('./TRAIN/*.wav')
+    validation_data = preprocessing('./TEST/*.wav')
     rbm = rbm()
-    rbm.train(input_data)
+    rbm.train(input_data, validation_data)
     

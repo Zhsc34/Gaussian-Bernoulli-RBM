@@ -17,5 +17,5 @@ def NIST_to_wav(input_directory, output_directory):
 
     for f in files:
         sph = SPHFile(f)
-        name = f[f.rfind('\\') + 1: f.rfind('.')]
+        name = f[f.rfind('/') + 1: f.rfind('.')]
         sph.write_wav(output_directory + name + ".wav")
