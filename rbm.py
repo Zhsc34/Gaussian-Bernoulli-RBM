@@ -1,7 +1,11 @@
 import torch
 import numpy as np
+import glob
 from preprocessing import preprocessing
+from torch.utils import data
 from nist_to_wav import NIST_to_wav
+from Dataset import Dataset
+from Dataset import RBMSampler
 
 # torch.set_default_dtype(torch.double)
 
@@ -11,7 +15,7 @@ class rbm():
     def __init__(self, 
         visible_size=100, hidden_size=120, weights_init=None, hidden_bias_init=None, visible_bias_init=None, 
         learning_rate=1e-4, momentum=0.5, n_epoch=30, batch_size=100, visible_std_init=10,
-        n_gibbs_sampling=1, hidden_type="ssu", use_cuda=False):
+        n_gibbs_sampling=1, hidden_type="ssu", use_cuda=True):
         """
         Gaussian-Bernoulli Restricted Boltzmann Machine with SSUs
 
@@ -59,6 +63,7 @@ class rbm():
         self.n_gibbs_sampling = n_gibbs_sampling
         self.hidden_type = hidden_type
         self.visible_std = torch.full((1, visible_size), visible_std_init)
+        self.use_cuda = use_cuda
 
         self.weights = torch.empty(visible_size, hidden_size)
         if weights_init is None:
@@ -84,29 +89,36 @@ class rbm():
         self.weights_momentum = self.weights.clone()
         self.visible_std_momentum = self.visible_std.clone()
 
-    def train(self, input_data, validation_data):
+    def train(self, train_directory, test_directory, validation_size):
         """
         Train RBM with input data
 
         input_data: numpy array
             numpy array containing the training data
         """
-        input_size = input_data.shape[0]
-        num_batch_in_input = int(input_size/self.batch_size)
+        training_set = Dataset(train_directory)
+        testing_set = Dataset(test_directory)
+        num_batch_in_input = len(training_set)//self.batch_size
+
         free_energy_gaps = torch.empty(self.n_epoch * num_batch_in_input) 
-        training_set_representative = torch.from_numpy(input_data[np.random.choice(input_size, size=10, replace=False), :]).cuda()
-        validation_data = torch.from_numpy(validation_data).cuda()
-        validation_size = validation_data.shape[0]
-        validation_set = validation_data[np.random.choice(validation_size, size=10, replace=False), :]
+        training_generator = data.DataLoader(training_set, sampler=data.RandomSampler(training_set), batch_size=self.batch_size, drop_last=True, pin_memory=True)
+        training_representative_generator = data.DataLoader(training_set, sampler=data.RandomSampler(training_set), batch_size=validation_size, drop_last=True, pin_memory=True)
+        validation_generator = data.DataLoader(testing_set, sampler=data.RandomSampler(testing_set), batch_size=validation_size, drop_last=True, pin_memory=True)
+
+        training_set_representative = next(iter(training_representative_generator)).to(torch.device('cuda'))
 
         batch_num = 1
         for i in range(self.n_epoch):
-            for j in range(num_batch_in_input):
-                idx = np.random.choice(input_size, size=self.batch_size, replace=False)
-                batch = input_data[idx, :]
+            for batch in training_generator:
+
+                batch = batch.to(torch.device('cuda'))
                 print("Batch #" + str(batch_num), end='')
-                self.contrastive_divergence(torch.from_numpy(batch).cuda()) 
-                free_energy_gaps[batch_num - 1] = self.free_energy(training_set_representative) - self.free_energy(validation_set)
+
+                self.contrastive_divergence(batch) 
+                feg = self.free_energy(training_set_representative) - self.free_energy(next(iter(validation_generator)).to(torch.device('cuda')))
+                # feg = self.free_energy(training_set_representative) - self.free_energy(validation_set_representative.to(torch.device('cuda')))
+                free_energy_gaps[batch_num - 1] = feg
+                print("             FEG: " + str(feg.item()))
                 batch_num += 1
 
         torch.save(self.visible_bias, "visible_bias.pt")
@@ -139,8 +151,8 @@ class rbm():
         hidden_layer = self.sample_hidden(visible_layer)
         if(self.hidden_type == "bernoulli"):
             hidden_layer = torch.bernoulli(hidden_layer)
-        # positive_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
-        positive_association = torch.matmul(visible_layer.t(), hidden_layer)
+        positive_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        # positive_association = torch.matmul(visible_layer.t(), hidden_layer)
         positive_hidden_association = hidden_layer
         positive_std_association = torch.pow(visible_layer - self.visible_bias, 2) 
 
@@ -150,11 +162,11 @@ class rbm():
             if(self.hidden_type == "bernoulli"):
                 hidden_layer = torch.bernoulli(hidden_layer)
         
-        # negative_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
-        negative_association = torch.matmul(visible_layer.t(), hidden_layer)
+        negative_association = torch.bmm(visible_layer.unsqueeze(2), hidden_layer.unsqueeze(1))
+        # negative_association = torch.matmul(visible_layer.t(), hidden_layer)
 
-        # self.weights_momentum = self.weights_momentum * self.momentum + torch.sum(positive_association - negative_association, dim=0)
-        self.weights_momentum = self.weights_momentum * self.momentum + positive_association - negative_association
+        self.weights_momentum = self.weights_momentum * self.momentum + torch.sum(positive_association - negative_association, dim=0)
+        # self.weights_momentum = self.weights_momentum * self.momentum + positive_association - negative_association
         self.visible_bias_momentum = self.visible_bias_momentum * self.momentum + torch.sum(batch - visible_layer, dim=0)
         self.hidden_bias_momentum = self.hidden_bias_momentum * self.momentum + torch.sum(positive_hidden_association - hidden_layer, dim=0)
 
@@ -168,7 +180,7 @@ class rbm():
         self.visible_std += self.visible_std_momentum * self.learning_rate / self.batch_size
         # self.visible_std += torch.div(torch.sum(negative_std_association - positive_std_association, dim=0), torch.pow(self.visible_std, 3)) * self.learning_rate / self.batch_size
         error = torch.sum((batch - visible_layer) ** 2) / (self.batch_size * self.visible_size)
-        print("             Error: " + str(error.item()))
+        print("             Error: " + str(error.item()), end='')
     
 
     def sample_hidden(self, visible_layer):
@@ -206,8 +218,9 @@ class rbm():
 
 if __name__ == "__main__":
     # NIST_to_wav('./TIMIT/TRAIN/*/*/*.WAV', './TRAIN/')
-    input_data = preprocessing('./TRAIN/*.wav')
-    validation_data = preprocessing('./TEST/*.wav')
-    rbm = rbm()
-    rbm.train(input_data, validation_data)
+    # input_data = preprocessing('./TRAIN/*.wav')
+    # preprocessing('./TEST/*.wav')
+    # validation_data = preprocessing('./TEST/*.wav')
+    rbm = rbm(n_epoch=30)
+    rbm.train("./TRAIN_PT/*.pt", "./TEST_PT/*.pt", 10)
     
